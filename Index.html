@@ -1,0 +1,278 @@
+<!doctype html>
+
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ThingSpeak Dashboard — Temperatura / Umidade / Luz</title>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#94a3b8;--accent:#60a5fa;--success:#34d399;--danger:#fb7185}
+    html,body{height:100%;margin:0;font-family:Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:linear-gradient(180deg,#071028 0%, #071422 100%);color:#e6eef8}
+    .container{max-width:1100px;margin:28px auto;padding:20px}
+    header{display:flex;gap:16px;align-items:center;justify-content:space-between}
+    h1{font-size:20px;margin:0}
+    .controls{display:flex;gap:8px;align-items:center}
+    .btn{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.04);padding:8px 12px;border-radius:8px;color:var(--muted);cursor:pointer}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,0.03)}
+    .metric{display:flex;align-items:center;gap:12px}
+    .metric .value{font-size:28px;font-weight:600}
+    .metric .label{color:var(--muted);font-size:13px}
+    .status{padding:6px 8px;border-radius:999px;font-size:13px}
+    .status.ok{background:rgba(52,211,153,0.12);color:var(--success);border:1px solid rgba(52,211,153,0.08)}
+    .status.warn{background:rgba(251,113,133,0.08);color:var(--danger);border:1px solid rgba(251,113,133,0.06)}
+    .chart-wrap{grid-column:span 3;padding-top:8px}
+    small.muted{color:var(--muted)}
+    footer{margin-top:18px;color:var(--muted);font-size:13px}
+    @media (max-width:900px){.grid{grid-template-columns:repeat(1,1fr)}.chart-wrap{grid-column:span 1}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>ThingSpeak Dashboard — Temperatura • Umidade • Luz</h1>
+        <small class="muted">Canal: <strong>3060355</strong> · Campos: 1(T°),2(Status T°),3(Umid),4(Status U),5(Luz),6(Status Luz)</small>
+      </div>
+      <div class="controls">
+        <button id="refreshBtn" class="btn">Atualizar</button>
+        <select id="interval" class="btn">
+          <option value="15000">Atualização: 15s</option>
+          <option value="30000">Atualização: 30s</option>
+          <option value="60000">Atualização: 1min</option>
+          <option value="0">Parar auto</option>
+        </select>
+      </div>
+    </header><main class="grid" id="mainGrid">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div class="metric">
+          <div>
+            <div class="value" id="tempValue">— °C</div>
+            <div class="label">Temperatura (°C)</div>
+          </div>
+        </div>
+        <small class="muted">Últimos pontos: <span id="tempCount">0</span></small>
+      </div>
+      <div>
+        <div id="tempStatus" class="status">—</div>
+        <div style="height:6px"></div>
+        <small class="muted" id="tempTS">—</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div class="metric">
+          <div>
+            <div class="value" id="humValue">— %</div>
+            <div class="label">Umidade (%)</div>
+          </div>
+        </div>
+        <small class="muted">Últimos pontos: <span id="humCount">0</span></small>
+      </div>
+      <div>
+        <div id="humStatus" class="status">—</div>
+        <div style="height:6px"></div>
+        <small class="muted" id="humTS">—</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div class="metric">
+          <div>
+            <div class="value" id="ldrValue">—</div>
+            <div class="label">Luz (LDR)</div>
+          </div>
+        </div>
+        <small class="muted">Últimos pontos: <span id="ldrCount">0</span></small>
+      </div>
+      <div>
+        <div id="ldrStatus" class="status">—</div>
+        <div style="height:6px"></div>
+        <small class="muted" id="ldrTS">—</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="card chart-wrap">
+    <canvas id="lineChart" height="120"></canvas>
+  </div>
+
+  <div class="card" style="grid-column:span 3">
+    <small class="muted">API endpoints (lidos do ThingSpeak):</small>
+    <pre style="background:rgba(0,0,0,0.12);padding:10px;border-radius:8px;overflow:auto;font-size:13px">GET https://api.thingspeak.com/channels/3060355/feeds.json?api_key=G27F2NFMAZB19QR0&results=20</pre>
+  </div>
+
+</main>
+
+<footer>
+  <div id="statusLine">Status: carregando...</div>
+</footer>
+
+  </div>  <script>
+    // CONFIG ---------------------------------
+    const CHANNEL_ID = 3060355;
+    const READ_API_KEY = 'G27F2NFMAZB19QR0'; // chave de leitura que você enviou
+    const RESULTS = 20; // quantos pontos buscar
+
+    // Elementos
+    const tempValue = document.getElementById('tempValue');
+    const humValue = document.getElementById('humValue');
+    const ldrValue = document.getElementById('ldrValue');
+    const tempStatusEl = document.getElementById('tempStatus');
+    const humStatusEl = document.getElementById('humStatus');
+    const ldrStatusEl = document.getElementById('ldrStatus');
+    const tempTS = document.getElementById('tempTS');
+    const humTS = document.getElementById('humTS');
+    const ldrTS = document.getElementById('ldrTS');
+    const tempCount = document.getElementById('tempCount');
+    const humCount = document.getElementById('humCount');
+    const ldrCount = document.getElementById('ldrCount');
+    const statusLine = document.getElementById('statusLine');
+
+    const refreshBtn = document.getElementById('refreshBtn');
+    const intervalSelect = document.getElementById('interval');
+
+    let intervalId = null;
+
+    // Chart.js setup
+    const ctx = document.getElementById('lineChart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Temperatura (°C)', data: [], tension:0.3, fill:false, borderWidth:2 },
+          { label: 'Umidade (%)', data: [], tension:0.3, fill:false, borderWidth:2 },
+          { label: 'Luz (LDR)', data: [], tension:0.3, fill:false, borderWidth:2 }
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: {mode:'index',intersect:false},
+        stacked: false,
+        scales: {
+          y: { beginAtZero: false, ticks: {color:'#cbd5e1'} },
+          x: { ticks: {color:'#cbd5e1'} }
+        },
+        plugins:{ legend:{labels:{color:'#cbd5e1'}} }
+      }
+    });
+
+    // Helpers
+    function setStatusEl(el, text){
+      el.textContent = text || '—';
+      el.classList.remove('ok','warn');
+      if(!text) return;
+      const t = text.toLowerCase();
+      if(t.includes('ok') || t.includes('normal') || t.includes('ativo') || t.includes('on')) el.classList.add('ok');
+      else if(t.includes('alto') || t.includes('alert') || t.includes('erro') || t.includes('off') || t.includes('falha')) el.classList.add('warn');
+    }
+
+    function formatTS(ts){
+      if(!ts) return '—';
+      const d = new Date(ts);
+      return d.toLocaleString();
+    }
+
+    // Fetch data from ThingSpeak
+    async function fetchFeeds(){
+      try{
+        statusLine.textContent = 'Status: buscando dados...';
+        const url = `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds.json?api_key=${READ_API_KEY}&results=${RESULTS}`;
+        const res = await fetch(url);
+        if(!res.ok) throw new Error('Erro na resposta: ' + res.status);
+        const json = await res.json();
+        const feeds = json.feeds || [];
+
+        // prepare arrays
+        const labels = [];
+        const temps = [];
+        const hums = [];
+        const ldrs = [];
+
+        feeds.forEach(f => {
+          labels.push(f.created_at ? new Date(f.created_at).toLocaleTimeString() : '');
+          temps.push(f.field1 !== null ? Number(f.field1) : null);
+          hums.push(f.field3 !== null ? Number(f.field3) : null);
+          ldrs.push(f.field5 !== null ? Number(f.field5) : null);
+        });
+
+        // update latest values (take last non-null value)
+        const lastTemp = findLastNonNull(temps);
+        const lastHum = findLastNonNull(hums);
+        const lastLdr = findLastNonNull(ldrs);
+
+        tempValue.textContent = lastTemp !== null ? `${lastTemp} °C` : '—';
+        humValue.textContent = lastHum !== null ? `${lastHum} %` : '—';
+        ldrValue.textContent = lastLdr !== null ? `${lastLdr}` : '—';
+
+        tempCount.textContent = feeds.filter(f=>f.field1!==null).length;
+        humCount.textContent = feeds.filter(f=>f.field3!==null).length;
+        ldrCount.textContent = feeds.filter(f=>f.field5!==null).length;
+
+        // status fields (2,4,6) use latest feed entry's values
+        const latestFeed = [...feeds].reverse().find(f => f) || null;
+        if(latestFeed){
+          setStatusEl(tempStatusEl, latestFeed.field2);
+          setStatusEl(humStatusEl, latestFeed.field4);
+          setStatusEl(ldrStatusEl, latestFeed.field6);
+          tempTS.textContent = latestFeed.created_at ? formatTS(latestFeed.created_at) : '—';
+          humTS.textContent = latestFeed.created_at ? formatTS(latestFeed.created_at) : '—';
+          ldrTS.textContent = latestFeed.created_at ? formatTS(latestFeed.created_at) : '—';
+        }
+
+        // update chart
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = temps;
+        chart.data.datasets[1].data = hums;
+        chart.data.datasets[2].data = ldrs;
+        chart.update();
+
+        statusLine.textContent = `Status: ${feeds.length} pontos carregados — última leitura: ${feeds.length? formatTS(feeds[feeds.length-1].created_at): '—'}`;
+
+      }catch(err){
+        console.error(err);
+        statusLine.textContent = 'Erro ao buscar dados — veja console';
+      }
+    }
+
+    function findLastNonNull(arr){
+      for(let i = arr.length-1;i>=0;i--){
+        if(arr[i] !== null && arr[i] !== undefined && !Number.isNaN(arr[i])) return arr[i];
+      }
+      return null;
+    }
+
+    // Auto-refresh handling
+    function setAutoInterval(ms){
+      if(intervalId) { clearInterval(intervalId); intervalId = null; }
+      if(ms>0) intervalId = setInterval(fetchFeeds, ms);
+    }
+
+    // UI events
+    refreshBtn.addEventListener('click', ()=> fetchFeeds());
+    intervalSelect.addEventListener('change', (e)=> setAutoInterval(Number(e.target.value)));
+
+    // init
+    fetchFeeds();
+    setAutoInterval(Number(intervalSelect.value));
+
+    // OPTIONAL: example of sending a write request to update field1
+    // function writeField1(value){
+    //   const WRITE_API_KEY = 'CRO5ZWS383NZ4R2B';
+    //   fetch(`https://api.thingspeak.com/update?api_key=${WRITE_API_KEY}&field1=${encodeURIComponent(value)}`)
+    //     .then(r=>r.text()).then(t=>console.log('write response',t)).catch(console.error);
+    // }
+
+  </script></body>
+</html>
